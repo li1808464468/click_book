@@ -12,19 +12,21 @@ interface UploadModalProps {
 export default function UploadModal({ onClose, onComplete }: UploadModalProps) {
   const [uploading, setUploading] = useState(false)
   const [uploadType, setUploadType] = useState<'pdf' | 'images'>('pdf')
+  const [progress, setProgress] = useState(0)
 
   const onDrop = async (acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return
 
     setUploading(true)
+    setProgress(0)
 
     try {
       let response
 
       if (uploadType === 'pdf') {
-        response = await uploadApi.uploadPdf(acceptedFiles[0])
+        response = await uploadApi.uploadPdf(acceptedFiles[0], (p) => setProgress(p))
       } else {
-        response = await uploadApi.uploadImages(acceptedFiles)
+        response = await uploadApi.uploadImages(acceptedFiles, (p) => setProgress(p))
       }
 
       if (response.data.success && response.data.data) {
@@ -106,9 +108,23 @@ export default function UploadModal({ onClose, onComplete }: UploadModalProps) {
           <input {...getInputProps()} />
           <FiUpload className="w-16 h-16 mx-auto mb-4 text-gray-400" />
           {uploading ? (
-            <div>
-              <p className="text-xl font-semibold text-gray-900 mb-2">上传中...</p>
-              <p className="text-gray-600">请稍候</p>
+            <div className="w-full max-w-xs mx-auto">
+              <p className="text-xl font-semibold text-gray-900 mb-2">
+                {progress < 100 ? `上传中 ${progress}%` : '正在处理...'}
+              </p>
+              <div className="w-full bg-gray-200 rounded-full h-2.5 mb-2 overflow-hidden">
+                <div 
+                  className={`h-2.5 rounded-full transition-all duration-300 ease-out ${
+                    progress < 100 ? 'bg-blue-600' : 'bg-green-500 w-full animate-pulse'
+                  }`}
+                  style={{ width: `${progress}%` }}
+                ></div>
+              </div>
+              <p className="text-gray-600 text-sm animate-pulse">
+                {progress < 100 
+                  ? '正在上传文件...' 
+                  : '正在转换格式和生成页面，大文件可能需要几分钟，请耐心等待...'}
+              </p>
             </div>
           ) : isDragActive ? (
             <div>

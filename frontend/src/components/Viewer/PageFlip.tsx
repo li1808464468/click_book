@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, forwardRef } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import HTMLFlipBook from 'react-pageflip'
 import type { Book, AudioElement, BookPage, TextElement } from '@shared/index'
 
@@ -13,25 +13,35 @@ const CANVAS_WIDTH = 748
 const CANVAS_HEIGHT = 1000
 
 // 单页组件
-const Page = forwardRef<HTMLDivElement, {
+const Page = ({
+  pageData,
+  pageNumber,
+  scale,
+  playingAudios,
+  onToggleAudio
+}: {
   pageData: BookPage
+  pageNumber: number
   scale: number
   playingAudios: Set<string>
   onToggleAudio: (audio: AudioElement) => void
-}>(({ pageData, scale, playingAudios, onToggleAudio }, ref) => {
+}) => {
   const imageRef = useRef<HTMLImageElement>(null)
 
+  // 当 imageUrl 变化时，强制更新图片 src
+  useEffect(() => {
+    if (imageRef.current && imageRef.current.src !== pageData.imageUrl) {
+      imageRef.current.src = pageData.imageUrl
+    }
+  }, [pageData.imageUrl])
+
   return (
-    <div ref={ref} className="relative bg-white" style={{ 
-      width: '100%', 
-      height: '100%',
-      overflow: 'hidden'
-    }}>
+    <div className="relative bg-white w-full h-full overflow-hidden">
       {/* 页面图片 - 填充整个页面 */}
       <img
         ref={imageRef}
         src={pageData.imageUrl}
-        alt="Page"
+        alt={`Page ${pageNumber + 1}`}
         className="w-full h-full"
         style={{
           userSelect: 'none',
@@ -108,9 +118,7 @@ const Page = forwardRef<HTMLDivElement, {
       </div>
     </div>
   )
-})
-
-Page.displayName = 'Page'
+}
 
 export default function PageFlip({ book, currentPage, onPageChange }: PageFlipProps) {
   const flipBookRef = useRef<any>(null)
@@ -118,6 +126,10 @@ export default function PageFlip({ book, currentPage, onPageChange }: PageFlipPr
   const audioRefsMap = useRef<Map<string, HTMLAudioElement>>(new Map())
   // 记录哪些音频正在播放
   const [playingAudios, setPlayingAudios] = useState<Set<string>>(new Set())
+  // 音频播放队列
+  const audioQueueRef = useRef<AudioElement[]>([])
+  // 是否正在播放队列
+  const isPlayingQueueRef = useRef(false)
   // 记录缩放比例
   const [scale, setScale] = useState(1)
   // 窗口尺寸
@@ -175,7 +187,9 @@ export default function PageFlip({ book, currentPage, onPageChange }: PageFlipPr
   }, [bookWidth])
 
   // 播放音频函数
-  const playAudio = useCallback((audio: AudioElement) => {
+  const playAudio = useCallback((audio: AudioElement, fromQueue = false) => {
+    console.log('playAudio 被调用:', { name: audio.name, id: audio.id, fromQueue })
+    
     let audioEl = audioRefsMap.current.get(audio.id)
     
     // 标准化 URL 用于比较
@@ -189,6 +203,19 @@ export default function PageFlip({ book, currentPage, onPageChange }: PageFlipPr
     
     const currentUrl = audioEl ? normalizeUrl(audioEl.src) : null
     const newUrl = normalizeUrl(audio.audioUrl)
+    
+    // 播放队列中的下一个音频的函数
+    const playNext = () => {
+      if (audioQueueRef.current.length === 0) {
+        isPlayingQueueRef.current = false
+        return
+      }
+
+      const nextAudio = audioQueueRef.current.shift()
+      if (nextAudio) {
+        playAudio(nextAudio, true)
+      }
+    }
     
     // 如果音频对象不存在或URL已改变，创建新的
     if (!audioEl || currentUrl !== newUrl) {
@@ -210,6 +237,11 @@ export default function PageFlip({ book, currentPage, onPageChange }: PageFlipPr
           newSet.delete(audio.id)
           return newSet
         })
+        
+        // 如果是从队列播放的音频，播放完后继续播放下一个
+        if (fromQueue) {
+          playNext()
+        }
       })
       
       // 错误处理
@@ -220,6 +252,11 @@ export default function PageFlip({ book, currentPage, onPageChange }: PageFlipPr
           newSet.delete(audio.id)
           return newSet
         })
+        
+        // 如果是从队列播放的音频，出错后继续播放下一个
+        if (fromQueue) {
+          playNext()
+        }
       })
       
       audioRefsMap.current.set(audio.id, audioEl)
@@ -230,12 +267,34 @@ export default function PageFlip({ book, currentPage, onPageChange }: PageFlipPr
     }
 
     // 播放音频
+    console.log('开始播放音频:', audio.name, 'URL:', audio.audioUrl)
     audioEl.play().then(() => {
+      console.log('音频播放成功:', audio.name)
       setPlayingAudios(prev => new Set(prev).add(audio.id))
     }).catch(err => {
       console.error('播放音频失败:', audio.audioUrl, err)
+      // 如果播放失败且是从队列播放的，继续播放下一个
+      if (fromQueue) {
+        playNext()
+      }
     })
   }, [])
+
+  // 播放队列中的下一个音频
+  const playNextInQueue = useCallback(() => {
+    if (audioQueueRef.current.length === 0) {
+      isPlayingQueueRef.current = false
+      return
+    }
+
+    const nextAudio = audioQueueRef.current.shift()
+    if (!nextAudio) {
+      isPlayingQueueRef.current = false
+      return
+    }
+
+    playAudio(nextAudio, true)
+  }, [playAudio])
 
   // 切换音频播放状态
   const toggleAudio = useCallback((audio: AudioElement) => {
@@ -279,15 +338,43 @@ export default function PageFlip({ book, currentPage, onPageChange }: PageFlipPr
     const currentPageData = book.pages[currentPage]
     if (!currentPageData) return
 
-    // 播放当前页面所有设置了自动播放的音频
-    currentPageData.audioElements.forEach(audio => {
-      if (audio.behavior?.autoPlay) {
-        playAudio(audio)
-      }
+    // 收集所有设置了自动播放的音频
+    const autoPlayAudios = currentPageData.audioElements.filter(
+      audio => audio.behavior?.autoPlay
+    )
+
+    console.log('页面切换，检查自动播放音频:', {
+      pageIndex: currentPage,
+      totalAudios: currentPageData.audioElements.length,
+      autoPlayAudios: autoPlayAudios.length,
+      audioDetails: autoPlayAudios.map(a => ({ id: a.id, name: a.name, autoPlay: a.behavior?.autoPlay }))
     })
+
+    // 如果有多个自动播放音频，加入队列按顺序播放
+    if (autoPlayAudios.length > 0) {
+      // 清空之前的队列
+      audioQueueRef.current = []
+      isPlayingQueueRef.current = false
+
+      if (autoPlayAudios.length === 1) {
+        // 只有一个音频，直接播放
+        console.log('播放单个音频:', autoPlayAudios[0].name)
+        playAudio(autoPlayAudios[0])
+      } else {
+        // 多个音频，加入队列按顺序播放
+        console.log('加入队列播放，共', autoPlayAudios.length, '个音频')
+        audioQueueRef.current = [...autoPlayAudios]
+        isPlayingQueueRef.current = true
+        playNextInQueue()
+      }
+    }
 
     // 清理函数：离开页面时停止所有设置了 stopOnLeave 的当前页音频
     return () => {
+      // 停止队列播放
+      audioQueueRef.current = []
+      isPlayingQueueRef.current = false
+
       currentPageData.audioElements.forEach(audio => {
         if (audio.behavior?.stopOnLeave) {
           const audioEl = audioRefsMap.current.get(audio.id)
@@ -303,7 +390,7 @@ export default function PageFlip({ book, currentPage, onPageChange }: PageFlipPr
         }
       })
     }
-  }, [currentPage, book, playAudio])
+  }, [currentPage, book, playAudio, playNextInQueue])
 
   // 组件卸载时清理所有音频
   useEffect(() => {
@@ -317,10 +404,15 @@ export default function PageFlip({ book, currentPage, onPageChange }: PageFlipPr
   }, [])
 
   return (
-    <div className="relative w-full h-full flex items-center justify-center bg-gray-900 overflow-hidden">
+    <div 
+      className="relative w-full h-full flex items-center justify-center bg-gray-900 overflow-hidden"
+      style={{ touchAction: 'none', overscrollBehavior: 'none' }}
+    >
       <div className="relative overflow-hidden" style={{ 
         maxWidth: '100vw',
-        maxHeight: '100vh'
+        maxHeight: '100vh',
+        transition: 'transform 0.3s ease-out',
+        transform: !isMobile && currentPage === 0 ? 'translateX(-25%)' : 'translateX(0)'
       }}>
         <HTMLFlipBook
           ref={flipBookRef}
@@ -332,13 +424,13 @@ export default function PageFlip({ book, currentPage, onPageChange }: PageFlipPr
           minHeight={300}
           maxHeight={CANVAS_HEIGHT}
           drawShadow={true}
-          flippingTime={800}
+          flippingTime={500}
           usePortrait={isMobile}
           startPage={0}
           startZIndex={0}
           autoSize={false}
           maxShadowOpacity={0.5}
-          showCover={false}
+          showCover={true}
           mobileScrollSupport={true}
           swipeDistance={30}
           clickEventForward={true}
@@ -350,13 +442,19 @@ export default function PageFlip({ book, currentPage, onPageChange }: PageFlipPr
           style={{}}
         >
           {book.pages.map((pageData, index) => (
-            <Page
-              key={index}
-              pageData={pageData}
-              scale={scale}
-              playingAudios={playingAudios}
-              onToggleAudio={toggleAudio}
-            />
+            <div 
+              key={`page-${index}-${pageData.imageUrl}`}
+              className="page-wrapper"
+              style={{ width: '100%', height: '100%' }}
+            >
+              <Page
+                pageData={pageData}
+                pageNumber={index}
+                scale={scale}
+                playingAudios={playingAudios}
+                onToggleAudio={toggleAudio}
+              />
+            </div>
           ))}
         </HTMLFlipBook>
       </div>

@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useEditorStore } from '@/store/editorStore'
-import { useAuthStore } from '@/store/authStore'
-import { bookApi, uploadApi } from '@/services/api'
+import { bookApi } from '@/services/api'
 import EditorSidebar from '@/components/Editor/EditorSidebar'
 import EditorCanvas from '@/components/Editor/EditorCanvas'
 import EditorProperties from '@/components/Editor/EditorProperties'
@@ -17,26 +16,20 @@ import {
   FiChevronRight,
   FiZoomIn,
   FiZoomOut,
-  FiRotateCcw,
-  FiRotateCw,
   FiGrid,
   FiMaximize2,
-  FiLayers,
   FiSkipBack,
   FiSkipForward,
   FiPlus,
-  FiHome,
-  FiUser,
-  FiLogOut,
   FiBook,
-  FiSidebar
+  FiSidebar,
+  FiX
 } from 'react-icons/fi'
 import type { BookPage } from '@shared/index'
 
 export default function EditorPage() {
   const { bookId } = useParams()
   const navigate = useNavigate()
-  const { user, logout } = useAuthStore()
   const { 
     book, 
     setBook, 
@@ -54,6 +47,8 @@ export default function EditorPage() {
   } = useEditorStore()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [previewing, setPreviewing] = useState(false)
+  const [publishing, setPublishing] = useState(false)
   const [showUploadModal, setShowUploadModal] = useState(false)
   const [showMusicModal, setShowMusicModal] = useState(false)
   const [title, setTitle] = useState('')
@@ -120,20 +115,126 @@ export default function EditorPage() {
   }
 
   const handlePublish = async () => {
-    if (!book || !bookId) {
-      alert('请先保存作品')
+    if (!book) {
+      alert('请先创建作品')
       return
     }
 
+    // 先自动保存
+    setPublishing(true)
     try {
-      const response = await bookApi.publishBook(bookId)
-      if (response.data.success && response.data.data) {
-        alert('发布成功！')
-        window.open(response.data.data.shareUrl, '_blank')
+      if (title !== book.title) {
+        updateBookTitle(title)
+      }
+
+      let currentBookId = bookId
+      
+      // 如果是新作品，先创建
+      if (!bookId) {
+        const response = await bookApi.createBook({ ...book, title })
+        if (response.data.success && response.data.data) {
+          currentBookId = response.data.data.id
+          navigate(`/editor/${currentBookId}`, { replace: true })
+        }
+      } else {
+        // 如果是已有作品，先更新
+        await bookApi.updateBook(bookId, { ...book, title })
+      }
+
+      // 然后发布
+      if (currentBookId) {
+        const response = await bookApi.publishBook(currentBookId)
+        if (response.data.success && response.data.data) {
+          alert('保存并发布成功！')
+          window.open(response.data.data.shareUrl, '_blank')
+        }
       }
     } catch (error) {
       console.error('Failed to publish book:', error)
       alert('发布失败')
+    } finally {
+      setPublishing(false)
+    }
+  }
+
+  const handlePreview = async () => {
+    if (!book) {
+      alert('没有可预览的内容')
+      return
+    }
+
+    // 先自动保存
+    setPreviewing(true)
+    try {
+      if (title !== book.title) {
+        updateBookTitle(title)
+      }
+
+      let currentBookId = bookId
+      
+      // 如果是新作品，先创建
+      if (!bookId) {
+        const response = await bookApi.createBook({ ...book, title })
+        if (response.data.success && response.data.data) {
+          currentBookId = response.data.data.id
+          navigate(`/editor/${currentBookId}`, { replace: true })
+        }
+      } else {
+        // 如果是已有作品，先更新
+        await bookApi.updateBook(bookId, { ...book, title })
+      }
+
+      // 然后发布（如果还没发布）或获取分享链接
+      if (currentBookId) {
+        const response = await bookApi.publishBook(currentBookId)
+        if (response.data.success && response.data.data) {
+          // 在新标签页打开预览
+          window.open(response.data.data.shareUrl, '_blank')
+        }
+      }
+    } catch (error) {
+      console.error('Failed to preview book:', error)
+      alert('预览失败')
+    } finally {
+      setPreviewing(false)
+    }
+  }
+
+  const handleExit = async () => {
+    if (!book) {
+      navigate('/my-works')
+      return
+    }
+
+    // 退出前自动保存
+    const shouldSave = confirm('是否保存修改后退出？')
+    
+    if (shouldSave) {
+      setSaving(true)
+      try {
+        if (title !== book.title) {
+          updateBookTitle(title)
+        }
+
+        if (bookId) {
+          await bookApi.updateBook(bookId, { ...book, title })
+        } else {
+          await bookApi.createBook({ ...book, title })
+        }
+        
+        navigate('/my-works')
+      } catch (error) {
+        console.error('Failed to save book:', error)
+        alert('保存失败，是否仍要退出？')
+        const forceExit = confirm('保存失败，是否仍要退出？')
+        if (forceExit) {
+          navigate('/my-works')
+        }
+      } finally {
+        setSaving(false)
+      }
+    } else {
+      navigate('/my-works')
     }
   }
 
@@ -295,11 +396,20 @@ export default function EditorPage() {
           </button>
         </div>
 
-        {/* Right Section - Actions & User */}
+        {/* Right Section - Actions */}
         <div className="flex items-center space-x-3">
           <button
+            onClick={handlePreview}
+            disabled={saving || previewing || publishing}
+            className="px-4 py-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 text-white rounded-lg transition-colors flex items-center space-x-2"
+            title="预览作品"
+          >
+            <FiEye size={16} />
+            <span className="text-sm">{previewing ? '预览中...' : '预览'}</span>
+          </button>
+          <button
             onClick={handleSave}
-            disabled={saving}
+            disabled={saving || previewing || publishing}
             className="px-4 py-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 text-white rounded-lg transition-colors flex items-center space-x-2"
           >
             <FiSave size={16} />
@@ -307,32 +417,21 @@ export default function EditorPage() {
           </button>
           <button
             onClick={handlePublish}
-            className="px-4 py-2 bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white rounded-lg transition-colors flex items-center space-x-2"
+            disabled={saving || previewing || publishing}
+            className="px-4 py-2 bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 disabled:opacity-50 text-white rounded-lg transition-colors flex items-center space-x-2"
           >
-            <FiEye size={16} />
-            <span className="text-sm">发布与导出</span>
+            <FiSave size={16} />
+            <span className="text-sm">{publishing ? '发布中...' : '发布与导出'}</span>
           </button>
-          
-          <div className="h-6 w-px bg-gray-700"></div>
-          
-          {/* User Info */}
-          <div className="flex items-center space-x-3">
-            <div className="flex items-center space-x-2">
-              <FiUser className="w-4 h-4 text-gray-400" />
-              <span className="text-sm text-gray-300">{user?.username}</span>
-            </div>
-            <button
-              onClick={() => {
-                logout()
-                navigate('/login')
-              }}
-              className="flex items-center space-x-1 text-gray-400 hover:text-white transition-colors"
-              title="退出"
-            >
-              <FiLogOut className="w-4 h-4" />
-              <span className="text-sm">退出</span>
-            </button>
-          </div>
+          <button
+            onClick={handleExit}
+            disabled={saving || previewing || publishing}
+            className="px-4 py-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 text-white rounded-lg transition-colors flex items-center space-x-2"
+            title="退出编辑器"
+          >
+            <FiX size={16} />
+            <span className="text-sm">退出</span>
+          </button>
         </div>
       </div>
 

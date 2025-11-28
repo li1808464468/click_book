@@ -80,19 +80,35 @@ export const bookApi = {
 }
 
 export const uploadApi = {
-  uploadPdf: (file: File) => {
+  uploadPdf: (file: File, onProgress?: (progress: number) => void) => {
     const formData = new FormData()
     formData.append('file', file)
     return api.post<ApiResponse<UploadResponse>>('/upload/pdf', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
+      onUploadProgress: (progressEvent) => {
+        if (onProgress && progressEvent.total) {
+          const percentCompleted = Math.round(
+            (progressEvent.loaded * 100) / progressEvent.total
+          )
+          onProgress(percentCompleted)
+        }
+      },
     })
   },
 
-  uploadImages: (files: File[]) => {
+  uploadImages: (files: File[], onProgress?: (progress: number) => void) => {
     const formData = new FormData()
     files.forEach((file) => formData.append('files', file))
     return api.post<ApiResponse<UploadResponse>>('/upload/images', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
+      onUploadProgress: (progressEvent) => {
+        if (onProgress && progressEvent.total) {
+          const percentCompleted = Math.round(
+            (progressEvent.loaded * 100) / progressEvent.total
+          )
+          onProgress(percentCompleted)
+        }
+      },
     })
   },
 

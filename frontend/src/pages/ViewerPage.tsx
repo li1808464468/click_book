@@ -92,7 +92,11 @@ export default function ViewerPage() {
   }
 
   return (
-    <div ref={containerRef} className="h-screen bg-gray-900 flex flex-col overflow-hidden">
+    <div 
+      ref={containerRef} 
+      className="h-screen bg-gray-900 flex flex-col overflow-hidden"
+      style={{ touchAction: 'none', overscrollBehavior: 'none' }}
+    >
       {/* Header */}
       <div className="flex-shrink-0 bg-gray-800 px-3 md:px-6 py-3 md:py-4 flex items-center justify-between border-b border-gray-700">
         <h1 className="text-white text-base md:text-xl font-semibold truncate">{book.title}</h1>
